@@ -4,6 +4,8 @@
 
 Интеграция Home Assistant для автомобилей Evolute (i-Joy, i-Pro, i-Sky, i-Space и т.д.) через облачный сервис app.evassist.ru.
 
+<img width="1073" height="1653" alt="image" src="https://github.com/user-attachments/assets/bacb9294-98a1-44e8-bc8f-9967ff0c5f67" />
+
 ## Возможности
 
 - **30+ сенсоров**, включая:
