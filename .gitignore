@@ -1,0 +1,5 @@
+SUMMARY.md
+*.log
+.env
+__pycache__/
+*.pyc

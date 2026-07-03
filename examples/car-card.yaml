@@ -1,0 +1,301 @@
+# Evolute - карточка со схемой автомобиля
+#
+# Замените CAR_ID_HERE на ID вашего автомобиля везде в этом файле.
+# Его можно узнать из entity_id любого сенсора Evolute,
+# например sensor.evolute_CAR_ID_HERE_battery_percentage
+#
+# SVG-файлы копируются автоматически интеграцией в /config/www/evolute/.
+# В отличие от prizrak, кнопки ниже — обычный type: button,
+# HACS card-mod/button-card не требуются (у Evolute нет пар on/off команд).
+
+type: vertical-stack
+cards:
+  # Ряд 1: температура и общий статус
+  - type: horizontal-stack
+    cards:
+      - type: tile
+        entity: sensor.evolute_CAR_ID_HERE_outside_temp
+        name: На улице
+        icon: mdi:thermometer
+      - type: tile
+        entity: sensor.evolute_CAR_ID_HERE_battery_percentage
+        name: Заряд
+        icon: mdi:battery
+      - type: tile
+        entity: binary_sensor.evolute_CAR_ID_HERE_online
+        name: Связь
+        icon: mdi:car-connected
+        tap_action:
+          action: call-service
+          service: homeassistant.update_entity
+          service_data:
+            entity_id: sensor.evolute_CAR_ID_HERE_battery_percentage
+          confirmation:
+            text: "Обновить данные с сервера сейчас?"
+
+  # Ряд 2: левая колонка, схема автомобиля, правая колонка
+  - type: horizontal-stack
+    cards:
+      # Левая колонка
+      - type: vertical-stack
+        cards:
+          - type: tile
+            entity: sensor.evolute_CAR_ID_HERE_battery_voltage
+            name: 12В АКБ
+            icon: mdi:car-battery
+            vertical: false
+          - type: tile
+            entity: sensor.evolute_CAR_ID_HERE_remains_mileage
+            name: Запас хода
+            icon: mdi:map-marker-distance
+            vertical: false
+          - type: tile
+            entity: sensor.evolute_CAR_ID_HERE_satellites
+            name: GPS
+            icon: mdi:satellite-variant
+            vertical: false
+
+      # Центр: схема автомобиля сверху
+      - type: picture-elements
+        image: /local/evolute/car-full.svg
+        elements:
+          # Синий контур = центральный замок закрыт (машина "заперта")
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_central_lock
+                state: "off"
+            elements:
+              - type: image
+                image: /local/evolute/car-perimeter.svg
+                style:
+                  top: 50%
+                  left: 50%
+                  width: 100%
+                  height: 100%
+                  transform: translate(-50%, -50%)
+                  pointer-events: none
+
+          # Багажник открыт
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_trunk
+                state: "on"
+            elements:
+              - type: image
+                image: /local/evolute/door-trunk-open.svg
+                style:
+                  top: 0
+                  left: 0
+                  width: 100%
+                  height: 100%
+                  pointer-events: none
+
+          # Водительская дверь открыта
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_door_fl
+                state: "on"
+            elements:
+              - type: image
+                image: /local/evolute/door-fl-open.svg
+                style:
+                  top: 0
+                  left: 0
+                  width: 100%
+                  height: 100%
+                  pointer-events: none
+
+          # Передняя пассажирская дверь открыта
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_door_fr
+                state: "on"
+            elements:
+              - type: image
+                image: /local/evolute/door-fr-open.svg
+                style:
+                  top: 0
+                  left: 0
+                  width: 100%
+                  height: 100%
+                  pointer-events: none
+
+          # Задняя левая дверь открыта
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_door_rl
+                state: "on"
+            elements:
+              - type: image
+                image: /local/evolute/door-rl-open.svg
+                style:
+                  top: 0
+                  left: 0
+                  width: 100%
+                  height: 100%
+                  pointer-events: none
+
+          # Задняя правая дверь открыта
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_door_rr
+                state: "on"
+            elements:
+              - type: image
+                image: /local/evolute/door-rr-open.svg
+                style:
+                  top: 0
+                  left: 0
+                  width: 100%
+                  height: 100%
+                  pointer-events: none
+
+          # Иконка замка (видна, когда закрыт)
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_central_lock
+                state: "off"
+            elements:
+              - type: icon
+                icon: mdi:lock-outline
+                style:
+                  top: 8%
+                  left: 30%
+                  color: "#00c0fc"
+                  --mdc-icon-size: 26px
+                  opacity: 0.9
+
+          # Иконка зажигания
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_ignition
+                state: "on"
+            elements:
+              - type: icon
+                icon: mdi:engine
+                style:
+                  top: 8%
+                  left: 70%
+                  color: var(--state-binary_sensor-running-on-color, var(--state-binary_sensor-on-color, var(--state-active-color)))
+                  --mdc-icon-size: 26px
+                  opacity: 1
+
+          # Иконка климата (виден, когда включён)
+          - type: conditional
+            conditions:
+              - entity: binary_sensor.evolute_CAR_ID_HERE_climate
+                state: "on"
+            elements:
+              - type: icon
+                icon: mdi:air-conditioner
+                style:
+                  top: 90%
+                  left: 50%
+                  color: "#00c0fc"
+                  --mdc-icon-size: 24px
+                  opacity: 0.9
+
+          # Температура снаружи по центру машины
+          - type: state-label
+            entity: sensor.evolute_CAR_ID_HERE_outside_temp
+            suffix: "°C"
+            style:
+              top: 45%
+              left: 50%
+              color: var(--primary-text-color)
+              font-size: 12px
+              font-weight: bold
+              text-shadow: 2px 2px 4px rgba(0,0,0,0.8)
+
+      # Правая колонка
+      - type: vertical-stack
+        cards:
+          - type: tile
+            entity: sensor.evolute_CAR_ID_HERE_odometer
+            name: Пробег
+            icon: mdi:counter
+            vertical: false
+          - type: tile
+            entity: sensor.evolute_CAR_ID_HERE_speed
+            name: Скорость
+            icon: mdi:speedometer
+            vertical: false
+          - type: tile
+            entity: binary_sensor.evolute_CAR_ID_HERE_ignition
+            name: Зажигание
+            icon: mdi:key
+            vertical: false
+
+  # Ряд 3: кнопки управления (обычные button-карточки, без сторонних HACS-карточек)
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Замок
+        entity: button.evolute_CAR_ID_HERE_central_lock_toggle
+        icon: mdi:lock-outline
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.evolute_CAR_ID_HERE_central_lock_toggle
+      - type: button
+        name: Прогрев
+        entity: button.evolute_CAR_ID_HERE_heating_toggle
+        icon: mdi:radiator
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.evolute_CAR_ID_HERE_heating_toggle
+      - type: button
+        name: Охлаждение
+        entity: button.evolute_CAR_ID_HERE_cooling_toggle
+        icon: mdi:snowflake
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.evolute_CAR_ID_HERE_cooling_toggle
+      - type: button
+        name: Сигнал
+        entity: button.evolute_CAR_ID_HERE_blink
+        icon: mdi:bullhorn
+        tap_action:
+          action: call-service
+          service: button.press
+          target:
+            entity_id: button.evolute_CAR_ID_HERE_blink
+
+  # Дополнительно: подробные списки сенсоров
+  - type: entities
+    title: Двери и багажник
+    entities:
+      - entity: binary_sensor.evolute_CAR_ID_HERE_door_fl
+      - entity: binary_sensor.evolute_CAR_ID_HERE_door_fr
+      - entity: binary_sensor.evolute_CAR_ID_HERE_door_rl
+      - entity: binary_sensor.evolute_CAR_ID_HERE_door_rr
+      - entity: binary_sensor.evolute_CAR_ID_HERE_trunk
+      - entity: binary_sensor.evolute_CAR_ID_HERE_headlights
+
+  - type: entities
+    title: Климат
+    entities:
+      - entity: binary_sensor.evolute_CAR_ID_HERE_climate
+      - entity: binary_sensor.evolute_CAR_ID_HERE_climate_front_defrost
+      - entity: sensor.evolute_CAR_ID_HERE_climate_target_temp
+      - entity: sensor.evolute_CAR_ID_HERE_climate_current_temp
+      - entity: sensor.evolute_CAR_ID_HERE_inboard_temp
+
+  - type: entities
+    title: Батарея и температуры
+    entities:
+      - entity: sensor.evolute_CAR_ID_HERE_battery_temp
+      - entity: sensor.evolute_CAR_ID_HERE_coolant_temp
+      - entity: sensor.evolute_CAR_ID_HERE_fuel_percentage
+      - entity: sensor.evolute_CAR_ID_HERE_remains_mileage_fuel
+
+  - type: map
+    entities:
+      - entity: device_tracker.evolute_CAR_ID_HERE
+    hours_to_show: 24
+    aspect_ratio: "16:9"

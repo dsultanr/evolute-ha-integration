@@ -1,0 +1,6 @@
+{
+  "name": "Evolute",
+  "render_readme": true,
+  "domains": ["sensor", "binary_sensor", "button", "device_tracker"],
+  "homeassistant": "2023.1.0"
+}

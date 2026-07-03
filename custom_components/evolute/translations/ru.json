@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Evolute",
+        "description": "Введите значения cookies access_token и refresh_token из браузера после входа на app.evassist.ru (DevTools → Application → Cookies → evy-platform-access / evy-platform-refresh).",
+        "data": {
+          "access_token": "Access Token",
+          "refresh_token": "Refresh Token"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Обновите токены Evolute",
+        "description": "Токены Evolute устарели или были отозваны. Войдите в app.evassist.ru в браузере и вставьте новые значения cookies evy-platform-access и evy-platform-refresh.",
+        "data": {
+          "access_token": "Access Token",
+          "refresh_token": "Refresh Token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Не удалось авторизоваться с указанными токенами",
+      "unknown": "Произошла непредвиденная ошибка"
+    },
+    "abort": {
+      "already_configured": "Этот аккаунт уже настроен",
+      "reauth_successful": "Токены успешно обновлены"
+    }
+  }
+}
