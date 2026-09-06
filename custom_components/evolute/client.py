@@ -59,6 +59,12 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
 
     is_parked = bool(raw.get("isParked"))
 
+    # The API reports centralLockingStatus as 1 = locked / 0 = unlocked, while HA's
+    # LOCK binary sensor device class is inverted ("on" means unlocked), so flip it
+    # here to keep the entity showing Locked when the car is actually locked.
+    central_locking = sensors_data.get("centralLockingStatus")
+    central_lock_open = None if central_locking is None else not central_locking
+
     return {
         "battery_voltage": sensors_data.get("12VBatteryVoltage"),
         "odometer": sensors_data.get("odometer"),
@@ -67,7 +73,7 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
         "ignition": sensors_data.get("ignitionStatus"),
         "fuel_percentage": sensors_data.get("fuelPercentage"),
         "remains_mileage_fuel": sensors_data.get("remainsMileageFuel"),
-        "central_lock": sensors_data.get("centralLockingStatus"),
+        "central_lock": central_lock_open,
         "door_fl": sensors_data.get("doorFLStatus"),
         "door_fr": sensors_data.get("doorFRStatus"),
         "door_rl": sensors_data.get("doorRLStatus"),
