@@ -352,7 +352,11 @@ cards:
       - entity: sensor.evolute_CAR_ID_HERE_prep_script_time
         name: Длительность
       - entity: binary_sensor.evolute_CAR_ID_HERE_prep_available
+        name: Поддерживается
+      - entity: binary_sensor.evolute_CAR_ID_HERE_prep_disabled
+        name: Сейчас недоступна
       - entity: binary_sensor.evolute_CAR_ID_HERE_prep_error
+        name: Ошибка
       - entity: sensor.evolute_CAR_ID_HERE_status_text
         name: Статус
       - entity: sensor.evolute_CAR_ID_HERE_telemetry_time

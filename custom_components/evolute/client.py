@@ -14,6 +14,8 @@ from homeassistant.util import dt as dt_util
 from .const import (
     BASE_URL,
     CAR_SEARCH_URL,
+    COMMAND_CANCEL,
+    COMMAND_PREPARE,
     COOKIE_ACCESS,
     COOKIE_REFRESH,
     DISABLED_COMMANDS_KEY,
@@ -116,6 +118,19 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
             return None
         return row.get("state")
 
+    disabled_commands = {
+        command for command, row in by_command.items() if row.get("disabled")
+    }
+
+    # PREPARE / CANCEL are absent from buttons.main[], so their availability has to
+    # be derived from preparation_script. They are the two halves of one toggle: the
+    # app offers PREPARE while the script is idle and CANCEL while it runs.
+    prep_running = bool(prep.get("running"))
+    if prep_running or prep.get("disabled") or not prep.get("available"):
+        disabled_commands.add(COMMAND_PREPARE)
+    if not prep_running:
+        disabled_commands.add(COMMAND_CANCEL)
+
     return {
         "battery_voltage": sensors_data.get("12VBatteryVoltage"),
         "odometer": sensors_data.get("odometer"),
@@ -157,7 +172,7 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
         "cooling": _button_state("cooling"),
         "warnings_count": len(warnings),
         "has_warnings": bool(warnings),
-        "prep_running": bool(prep.get("running")),
+        "prep_running": prep_running,
         "prep_available": bool(prep.get("available")),
         "prep_disabled": bool(prep.get("disabled")),
         "prep_error": bool(prep.get("errorStatus")),
@@ -165,9 +180,7 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
         "prep_start_time": _parse_epoch_ms(prep.get("startTime")),
         # Not an entity state: consumed by the button platform to grey out a
         # command the backend is currently refusing.
-        DISABLED_COMMANDS_KEY: {
-            command for command, row in by_command.items() if row.get("disabled")
-        },
+        DISABLED_COMMANDS_KEY: disabled_commands,
     }
 
 

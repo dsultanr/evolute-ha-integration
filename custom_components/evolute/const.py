@@ -6,7 +6,7 @@ DOMAIN = "evolute"
 
 # Bump together with manifest.json: it is the cache-buster on the Lovelace resource
 # URL, so an old copy of the card is not served after an update.
-CARD_VERSION = "1.3.0"
+CARD_VERSION = "1.3.1"
 CARD_FILENAME = "evolute-hold-button.js"
 CARD_URL = f"/local/evolute/{CARD_FILENAME}"
 
@@ -41,6 +41,11 @@ COMMAND_PENDING_TIMEOUT_SECONDS = 60
 # Key under which the coordinator stashes the set of commands the backend is
 # currently refusing. Underscore-prefixed so it can never collide with a state key.
 DISABLED_COMMANDS_KEY = "_disabled_commands"
+
+# Trip preparation is the one pair of commands the API does not describe in
+# buttons.main[]; its availability lives in preparation_script instead.
+COMMAND_PREPARE = "PREPARE"
+COMMAND_CANCEL = "CANCEL"
 
 # Sensor definitions: (name, unit, device_class, icon, state_key, state_class)
 SENSOR_TYPES = {
@@ -100,8 +105,11 @@ BINARY_SENSOR_TYPES = {
     # is the toggle state the app renders in buttons.main[].
     "heating": ("Heating", BinarySensorDeviceClass.RUNNING, "heating"),
     "cooling": ("Cooling", BinarySensorDeviceClass.RUNNING, "cooling"),
-    "prep_available": ("Trip Preparation Available", None, "prep_available"),
-    "prep_disabled": ("Trip Preparation Blocked", BinarySensorDeviceClass.PROBLEM, "prep_disabled"),
+    # The two flags are not opposites: `available` says the car supports trip
+    # preparation at all, `disabled` says it cannot be started right now, so both
+    # are on together whenever the feature exists but is momentarily refused.
+    "prep_available": ("Trip Preparation Supported", None, "prep_available"),
+    "prep_disabled": ("Trip Preparation Unavailable Now", BinarySensorDeviceClass.PROBLEM, "prep_disabled"),
     "prep_error": ("Trip Preparation Error", BinarySensorDeviceClass.PROBLEM, "prep_error"),
     "warnings": ("Warnings", BinarySensorDeviceClass.PROBLEM, "has_warnings"),
     # Sourced from the slow /car/v2/search poll rather than tbox telemetry.
@@ -120,8 +128,8 @@ BUTTON_TYPES = {
     "cooling_toggle": ("Toggle Cooling", "cooling", "mdi:snowflake", "cooling"),
     "trunk_toggle": ("Toggle Trunk", "trunkToggle", "mdi:car-back", "trunk"),
     "blink": ("Blink & Honk", "blink", "mdi:bullhorn", None),
-    "prepare_start": ("Start Trip Preparation", "PREPARE", "mdi:car-clock", "prep_running"),
+    "prepare_start": ("Start Trip Preparation", COMMAND_PREPARE, "mdi:car-clock", "prep_running"),
     # CANCEL is not confirmed in captured traffic (PREPARE was never triggered
     # during capture); included by analogy with PREPARE, may not work on all accounts.
-    "prepare_cancel": ("Cancel Trip Preparation", "CANCEL", "mdi:car-clock", "prep_running"),
+    "prepare_cancel": ("Cancel Trip Preparation", COMMAND_CANCEL, "mdi:car-clock", "prep_running"),
 }
