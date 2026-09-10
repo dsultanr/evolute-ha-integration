@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import EvoluteDataUpdateCoordinator
+from .entity import build_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,14 +43,14 @@ class EvoluteDeviceTracker(CoordinatorEntity, TrackerEntity):
         self._attr_unique_id = f"evolute_{self._car_id}_tracker"
         self.entity_id = f"device_tracker.evolute_{self._car_id}"
         self._attr_icon = "mdi:car"
+        # The account carries a rendering of the exact model/colour; use it as the
+        # entity picture so the map and tile cards show the actual car.
+        if car.get("image"):
+            self._attr_entity_picture = car["image"]
 
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, self._car_id)},
-            "name": car.get("name") or f"Evolute {self._car_id}",
-            "manufacturer": "Evolute",
-            "model": car.get("model"),
-            "suggested_area": "Garage",
-        }
+        self._car = car
+
+        self._attr_device_info = build_device_info(car)
 
     def _car_data(self) -> dict[str, Any]:
         return self.coordinator.data.get(self._car_id, {})
@@ -101,4 +102,14 @@ class EvoluteDeviceTracker(CoordinatorEntity, TrackerEntity):
         for key in ("course", "altitude", "satellites", "hdop", "speed"):
             if data.get(key) is not None:
                 attributes[key] = data[key]
+
+        # Static vehicle identity, only available from /car/v2/search at setup.
+        for attribute, car_key in (
+            ("vin", "vin"),
+            ("modification", "modification"),
+            ("model_year", "model_year"),
+            ("color", "color"),
+        ):
+            if self._car.get(car_key) is not None:
+                attributes[attribute] = self._car[car_key]
         return attributes

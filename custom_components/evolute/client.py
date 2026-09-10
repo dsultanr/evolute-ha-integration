@@ -11,7 +11,14 @@ import aiohttp
 
 from homeassistant.util import dt as dt_util
 
-from .const import BASE_URL, CAR_SEARCH_URL, COOKIE_ACCESS, COOKIE_REFRESH, REFRESH_URL
+from .const import (
+    BASE_URL,
+    CAR_SEARCH_URL,
+    COOKIE_ACCESS,
+    COOKIE_REFRESH,
+    DISABLED_COMMANDS_KEY,
+    REFRESH_URL,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,12 +49,31 @@ def _local_utc_offset_hours() -> int:
     return int(offset.total_seconds() // 3600)
 
 
+def _parse_iso_timestamp(raw: Any) -> Any:
+    """Parse an ISO-8601 string from the API into an aware datetime, or None."""
+    if raw in (None, ""):
+        return None
+    return dt_util.parse_datetime(str(raw))
+
+
+def _parse_epoch_ms(raw: Any) -> Any:
+    """Parse a millisecond epoch (the API sends it as a string) into a datetime."""
+    if raw in (None, ""):
+        return None
+    try:
+        return dt_util.utc_from_timestamp(int(raw) / 1000)
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
     """Flatten the /car-service/tbox/{car_id}/info response for entity consumption."""
     sensors = raw.get("sensors") or {}
     sensors_data = sensors.get("sensorsData") or {}
     position = sensors.get("positionData") or {}
     prep = raw.get("preparation_script") or {}
+    chip = sensors.get("chip") or {}
+    warnings = raw.get("warnings") or []
 
     last_online = None
     last_online_raw = raw.get("lastOnlineTime")
@@ -57,6 +83,14 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
         except (ValueError, TypeError):
             last_online = None
 
+    telemetry_time = None
+    telemetry_time_raw = sensors.get("time")
+    if telemetry_time_raw not in (None, ""):
+        try:
+            telemetry_time = dt_util.utc_from_timestamp(int(telemetry_time_raw))
+        except (ValueError, TypeError):
+            telemetry_time = None
+
     is_parked = bool(raw.get("isParked"))
 
     # The API reports centralLockingStatus as 1 = locked / 0 = unlocked, while HA's
@@ -64,6 +98,23 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
     # here to keep the entity showing Locked when the car is actually locked.
     central_locking = sensors_data.get("centralLockingStatus")
     central_lock_open = None if central_locking is None else not central_locking
+
+    # The remote-control buttons carry the only server-side feedback for heating and
+    # cooling: sensorsData has no field for either, but buttons.main[] reports the
+    # toggle state the app renders, plus whether the command is currently accepted.
+    buttons = raw.get("buttons") or {}
+    button_rows: list[dict[str, Any]] = []
+    for group in ("main", "climate"):
+        rows = buttons.get(group)
+        if isinstance(rows, list):
+            button_rows.extend(row for row in rows if isinstance(row, dict))
+    by_command = {row["command"]: row for row in button_rows if row.get("command")}
+
+    def _button_state(command: str) -> bool | None:
+        row = by_command.get(command)
+        if row is None:
+            return None
+        return row.get("state")
 
     return {
         "battery_voltage": sensors_data.get("12VBatteryVoltage"),
@@ -100,8 +151,43 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
         "is_parked": is_parked,
         "is_moving": not is_parked,
         "last_online": last_online,
+        "telemetry_time": telemetry_time,
+        "status_text": chip.get("title"),
+        "heating": _button_state("heating"),
+        "cooling": _button_state("cooling"),
+        "warnings_count": len(warnings),
+        "has_warnings": bool(warnings),
         "prep_running": bool(prep.get("running")),
         "prep_available": bool(prep.get("available")),
+        "prep_disabled": bool(prep.get("disabled")),
+        "prep_error": bool(prep.get("errorStatus")),
+        "prep_end_time": prep.get("endTime"),
+        "prep_start_time": _parse_epoch_ms(prep.get("startTime")),
+        # Not an entity state: consumed by the button platform to grey out a
+        # command the backend is currently refusing.
+        DISABLED_COMMANDS_KEY: {
+            command for command, row in by_command.items() if row.get("disabled")
+        },
+    }
+
+
+def _parse_car_details(row: dict[str, Any]) -> dict[str, Any]:
+    """Flatten the slow-moving fields of a /car/v2/search row (service, OTA, ...)."""
+    maintenance = row.get("maintenance") or {}
+    meta = maintenance.get("meta") or {}
+    next_service = maintenance.get("next") or {}
+
+    return {
+        "maintenance_status": maintenance.get("status"),
+        "maintenance_days_left": meta.get("daysLeft"),
+        "maintenance_km_left": meta.get("kmLeft"),
+        "maintenance_date": _parse_iso_timestamp(next_service.get("date")),
+        "maintenance_mileage": next_service.get("mileage"),
+        "update_available": bool(row.get("updateAvailable")),
+        "location_enabled": bool(row.get("locationStatus")),
+        "prep_script_time": row.get("currentScriptTime"),
+        "last_sensor_request": _parse_iso_timestamp(row.get("lastSensorRequest")),
+        "last_command_trigger": _parse_iso_timestamp(row.get("lastCommandTrigger")),
     }
 
 
@@ -188,22 +274,32 @@ class EvoluteClient:
             self._tokens_updated_callback(self.access_token, self.refresh_token)
         return True
 
-    async def async_get_cars(self) -> list[dict[str, Any]] | None:
-        """Return the list of cars for this account, or None on auth failure."""
+    async def _async_search_cars(self) -> list[dict[str, Any]] | None:
+        """Return the raw /car/v2/search rows for this account, or None on failure."""
         body = {
             "limit": 50,
             "offset": 0,
-            "addSensors": False,
+            # Both flags cost nothing extra on the wire and carry the service /
+            # OTA / tracking fields that the tbox info endpoint does not report.
+            "addSensors": True,
             "filters": [],
-            "includeMaintenance": False,
+            "includeMaintenance": True,
         }
         result = await self._request("POST", CAR_SEARCH_URL, json_body=body)
         if result is None:
             return None
+        return [row for row in result.get("rows", []) if isinstance(row, dict)]
+
+    async def async_get_cars(self) -> list[dict[str, Any]] | None:
+        """Return the list of cars for this account, or None on auth failure."""
+        rows = await self._async_search_cars()
+        if rows is None:
+            return None
 
         cars = []
-        for row in result.get("rows", []):
+        for row in rows:
             model = row.get("carModel") or {}
+            images = row.get("images") or {}
             car_id = row.get("_id")
             if not car_id:
                 continue
@@ -214,10 +310,22 @@ class EvoluteClient:
                     "brand": row.get("brand") or "Evolute",
                     "model": model.get("name") or "Evolute",
                     "modification": model.get("modname"),
+                    "model_year": model.get("modelYear"),
+                    "color": model.get("color"),
+                    "image": images.get("side"),
                     "name": row.get("vin") or model.get("name") or car_id,
                 }
             )
         return cars
+
+    async def async_get_car_details(self) -> dict[str, dict[str, Any]] | None:
+        """Return slow-moving per-car data (service, OTA, tracking), keyed by car id."""
+        rows = await self._async_search_cars()
+        if rows is None:
+            return None
+        return {
+            row["_id"]: _parse_car_details(row) for row in rows if row.get("_id")
+        }
 
     async def async_get_car_info(self, car_id: str) -> dict[str, Any] | None:
         """Fetch and flatten telemetry for a single car. None on failure."""

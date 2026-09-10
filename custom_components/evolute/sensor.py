@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, SENSOR_TYPES
 from .coordinator import EvoluteDataUpdateCoordinator
+from .entity import build_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,13 +65,7 @@ class EvoluteSensor(CoordinatorEntity, SensorEntity):
         self._attr_icon = icon
         self._attr_state_class = state_class
 
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, self._car_id)},
-            "name": car.get("name") or f"Evolute {self._car_id}",
-            "manufacturer": "Evolute",
-            "model": car.get("model"),
-            "suggested_area": "Garage",
-        }
+        self._attr_device_info = build_device_info(car)
 
     @property
     def native_value(self) -> Any:

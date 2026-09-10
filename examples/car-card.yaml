@@ -4,9 +4,9 @@
 # Его можно узнать из entity_id любого сенсора Evolute,
 # например sensor.evolute_CAR_ID_HERE_battery_percentage
 #
-# SVG-файлы копируются автоматически интеграцией в /config/www/evolute/.
-# В отличие от prizrak, кнопки ниже — обычный type: button,
-# HACS card-mod/button-card не требуются (у Evolute нет пар on/off команд).
+# SVG-файлы и карточка кнопки копируются интеграцией в /config/www/evolute/
+# автоматически, сторонние HACS-карточки (card-mod / button-card) не нужны.
+# Кнопки используют собственную карточку custom:evolute-hold-button с удержанием.
 
 type: vertical-stack
 cards:
@@ -226,45 +226,78 @@ cards:
             icon: mdi:key
             vertical: false
 
-  # Ряд 3: кнопки управления (обычные button-карточки, без сторонних HACS-карточек)
+  # Ряд 3: кнопки управления с удержанием
+  #
+  # custom:evolute-hold-button входит в состав интеграции — файл копируется в
+  # /config/www/evolute/ и регистрируется как ресурс Lovelace автоматически.
+  # Если дашборд в YAML-режиме, добавьте ресурс вручную:
+  #   resources:
+  #     - url: /local/evolute/evolute-hold-button.js
+  #       type: module
+  #
+  # Короткое касание команду НЕ отправляет: кольцо вокруг иконки заполняется, пока
+  # держите, и только после этого уходит команда. Пока машина не подтвердила её
+  # телеметрией, кнопка показывает песочные часы и «отправлено…».
   - type: horizontal-stack
     cards:
-      - type: button
+      - type: custom:evolute-hold-button
         name: Замок
-        entity: button.evolute_CAR_ID_HERE_central_lock_toggle
         icon: mdi:lock-outline
-        tap_action:
-          action: call-service
-          service: button.press
-          target:
-            entity_id: button.evolute_CAR_ID_HERE_central_lock_toggle
-      - type: button
+        entity: button.evolute_CAR_ID_HERE_central_lock_toggle
+        state_entity: binary_sensor.evolute_CAR_ID_HERE_central_lock
+        state_labels:
+          "on": Открыт
+          "off": Закрыт
+        hold_time: 800
+      - type: custom:evolute-hold-button
         name: Прогрев
-        entity: button.evolute_CAR_ID_HERE_heating_toggle
         icon: mdi:radiator
-        tap_action:
-          action: call-service
-          service: button.press
-          target:
-            entity_id: button.evolute_CAR_ID_HERE_heating_toggle
-      - type: button
+        entity: button.evolute_CAR_ID_HERE_heating_toggle
+        state_entity: binary_sensor.evolute_CAR_ID_HERE_heating
+        state_labels:
+          "on": Включён
+          "off": Отключён
+      - type: custom:evolute-hold-button
         name: Охлаждение
-        entity: button.evolute_CAR_ID_HERE_cooling_toggle
         icon: mdi:snowflake
-        tap_action:
-          action: call-service
-          service: button.press
-          target:
-            entity_id: button.evolute_CAR_ID_HERE_cooling_toggle
-      - type: button
+        entity: button.evolute_CAR_ID_HERE_cooling_toggle
+        state_entity: binary_sensor.evolute_CAR_ID_HERE_cooling
+        state_labels:
+          "on": Включено
+          "off": Отключено
+      - type: custom:evolute-hold-button
         name: Сигнал
-        entity: button.evolute_CAR_ID_HERE_blink
         icon: mdi:bullhorn
-        tap_action:
-          action: call-service
-          service: button.press
-          target:
-            entity_id: button.evolute_CAR_ID_HERE_blink
+        entity: button.evolute_CAR_ID_HERE_blink
+        # Сигнал безобиден — отправляем обычным касанием.
+        require_hold: false
+
+  # Ряд 4: багажник и подготовка к поездке — только длинным нажатием
+  - type: horizontal-stack
+    cards:
+      - type: custom:evolute-hold-button
+        name: Багажник
+        icon: mdi:car-back
+        entity: button.evolute_CAR_ID_HERE_trunk_toggle
+        state_entity: binary_sensor.evolute_CAR_ID_HERE_trunk
+        state_labels:
+          "on": Открыт
+          "off": Закрыт
+        hold_time: 1000
+      - type: custom:evolute-hold-button
+        name: Подготовить
+        icon: mdi:car-clock
+        entity: button.evolute_CAR_ID_HERE_prepare_start
+        state_entity: binary_sensor.evolute_CAR_ID_HERE_preparing
+        state_labels:
+          "on": Идёт
+          "off": Не запущена
+        hold_time: 1000
+      - type: custom:evolute-hold-button
+        name: Отменить
+        icon: mdi:car-off
+        entity: button.evolute_CAR_ID_HERE_prepare_cancel
+        hold_time: 1000
 
   # Дополнительно: подробные списки сенсоров
   - type: entities
@@ -293,6 +326,38 @@ cards:
       - entity: sensor.evolute_CAR_ID_HERE_coolant_temp
       - entity: sensor.evolute_CAR_ID_HERE_fuel_percentage
       - entity: sensor.evolute_CAR_ID_HERE_remains_mileage_fuel
+
+  - type: entities
+    title: Обслуживание
+    entities:
+      - entity: sensor.evolute_CAR_ID_HERE_maintenance_days_left
+        name: ТО через (дней)
+      - entity: sensor.evolute_CAR_ID_HERE_maintenance_km_left
+        name: ТО через (км)
+      - entity: sensor.evolute_CAR_ID_HERE_maintenance_date
+        name: Дата ТО
+      - entity: sensor.evolute_CAR_ID_HERE_maintenance_mileage
+        name: Пробег к ТО
+      - entity: binary_sensor.evolute_CAR_ID_HERE_update_available
+        name: Доступно обновление
+      - entity: binary_sensor.evolute_CAR_ID_HERE_warnings
+        name: Предупреждения
+
+  - type: entities
+    title: Подготовка к поездке и связь
+    entities:
+      - entity: binary_sensor.evolute_CAR_ID_HERE_preparing
+      - entity: sensor.evolute_CAR_ID_HERE_prep_end_time
+        name: Осталось
+      - entity: sensor.evolute_CAR_ID_HERE_prep_script_time
+        name: Длительность
+      - entity: binary_sensor.evolute_CAR_ID_HERE_prep_available
+      - entity: binary_sensor.evolute_CAR_ID_HERE_prep_error
+      - entity: sensor.evolute_CAR_ID_HERE_status_text
+        name: Статус
+      - entity: sensor.evolute_CAR_ID_HERE_telemetry_time
+        name: Телеметрия от
+      - entity: binary_sensor.evolute_CAR_ID_HERE_location_enabled
 
   - type: map
     entities:

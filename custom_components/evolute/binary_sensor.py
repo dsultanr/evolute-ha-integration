@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import BINARY_SENSOR_TYPES, DOMAIN
 from .coordinator import EvoluteDataUpdateCoordinator
+from .entity import build_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,13 +57,7 @@ class EvoluteBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self.entity_id = f"binary_sensor.evolute_{self._car_id}_{sensor_key}"
         self._attr_device_class = device_class
 
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, self._car_id)},
-            "name": car.get("name") or f"Evolute {self._car_id}",
-            "manufacturer": "Evolute",
-            "model": car.get("model"),
-            "suggested_area": "Garage",
-        }
+        self._attr_device_info = build_device_info(car)
 
     @property
     def is_on(self) -> bool:
