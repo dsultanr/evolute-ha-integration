@@ -6,7 +6,7 @@ DOMAIN = "evolute"
 
 # Bump together with manifest.json: it is the cache-buster on the Lovelace resource
 # URL, so an old copy of the card is not served after an update.
-CARD_VERSION = "1.3.1"
+CARD_VERSION = "1.3.2"
 CARD_FILENAME = "evolute-hold-button.js"
 CARD_URL = f"/local/evolute/{CARD_FILENAME}"
 
@@ -31,12 +31,14 @@ DETAILS_RETRY_INTERVAL_SECONDS = 60
 
 # A remote command takes seconds to reach the car and be reflected back in the
 # telemetry, so a single refresh right after the press usually still reports the
-# old state. Poll a few times on a decaying schedule instead.
-COMMAND_REFRESH_DELAYS = (3, 8, 15, 25, 40)
+# old state. Poll a few times on a decaying schedule instead. The first polls are
+# close together because that is when the confirmation usually lands, and an
+# unchanged response costs almost nothing thanks to the ETag.
+COMMAND_REFRESH_DELAYS = (2, 5, 9, 14, 20, 30, 45)
 
-# How long a button keeps reporting "a command is in flight" if the telemetry never
-# confirms it. Long enough to cover COMMAND_REFRESH_DELAYS plus some slack.
-COMMAND_PENDING_TIMEOUT_SECONDS = 60
+# How long a button keeps reporting "waiting for the car to confirm" if the
+# telemetry never reflects the command. Matches the last refresh above.
+COMMAND_PENDING_TIMEOUT_SECONDS = 45
 
 # Key under which the coordinator stashes the set of commands the backend is
 # currently refusing. Underscore-prefixed so it can never collide with a state key.

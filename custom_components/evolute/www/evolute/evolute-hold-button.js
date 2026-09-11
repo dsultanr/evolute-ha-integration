@@ -9,6 +9,11 @@
  *   - whether the vehicle currently accepts the command  (attribute `blocked`)
  *   - that a sent command has not been confirmed by the car yet (attribute `pending`)
  *
+ * Only the request itself blocks the button. Once the API has accepted the command
+ * the card flashes a checkmark and is usable again; if the car still has to confirm
+ * the change in telemetry, that shows as a quiet pulse rather than a spinner, since
+ * the hold gesture is already the guard against an accidental second press.
+ *
  * Config:
  *   type: custom:evolute-hold-button
  *   entity: button.evolute_<car_id>_central_lock_toggle
@@ -21,7 +26,7 @@
  */
 
 const HOLD_TIME_DEFAULT = 700;
-const LOCAL_PENDING_MS = 8000;
+const SENT_FLASH_MS = 1200;
 const RING_RADIUS = 22;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
@@ -31,7 +36,8 @@ class EvoluteHoldButton extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this._holdTimer = null;
     this._pendingTimer = null;
-    this._localPendingUntil = 0;
+    this._sending = false;
+    this._sentUntil = 0;
     this._holding = false;
     this._rendered = false;
   }
@@ -139,7 +145,7 @@ class EvoluteHoldButton extends HTMLElement {
           stroke-dashoffset: ${RING_CIRCUMFERENCE};
           transition: stroke-dashoffset 150ms linear;
         }
-        .card.pending .progress {
+        .card.sending .progress {
           stroke-dasharray: ${RING_CIRCUMFERENCE * 0.25} ${RING_CIRCUMFERENCE};
           stroke-dashoffset: 0;
           transform-origin: 50% 50%;
@@ -147,6 +153,27 @@ class EvoluteHoldButton extends HTMLElement {
           transition: none;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        .card.sent .progress {
+          stroke: var(--success-color, #4caf50);
+          stroke-dashoffset: 0;
+          transition: stroke-dashoffset 200ms ease;
+        }
+
+        /* Waiting on the car, not on the request: a quiet pulse, and the button
+           stays usable because the hold gesture already prevents a stray press. */
+        .card.awaiting .progress {
+          stroke-dasharray: ${RING_CIRCUMFERENCE};
+          stroke-dashoffset: 0;
+          stroke: var(--secondary-text-color, #727272);
+          opacity: 0.45;
+          animation: breathe 1.6s ease-in-out infinite;
+          transition: none;
+        }
+        @keyframes breathe {
+          0%, 100% { opacity: 0.15; }
+          50% { opacity: 0.5; }
+        }
 
         ha-icon {
           position: absolute;
@@ -158,7 +185,8 @@ class EvoluteHoldButton extends HTMLElement {
           color: var(--state-icon-color, var(--paper-item-icon-color, #44739e));
         }
         .card.active ha-icon { color: var(--state-active-color, var(--primary-color)); }
-        .card.pending ha-icon { color: var(--primary-color); }
+        .card.sending ha-icon { color: var(--primary-color); }
+        .card.sent ha-icon { color: var(--success-color, #4caf50); }
         .card.disabled ha-icon { color: var(--disabled-text-color, #bdbdbd); }
 
         .name {
@@ -228,10 +256,20 @@ class EvoluteHoldButton extends HTMLElement {
     return this._hass.states[this._config.entity];
   }
 
-  _isPending() {
+  // The request is in flight: the only state that actually blocks the button.
+  _isSending() {
+    return this._sending;
+  }
+
+  // The API accepted the command a moment ago - a short, purely visual confirmation.
+  _justSent() {
+    return Date.now() < this._sentUntil;
+  }
+
+  // The car has yet to report the new state in telemetry. Informational only.
+  _isAwaiting() {
     const stateObj = this._entityState();
-    const remote = Boolean(stateObj && stateObj.attributes.pending);
-    return remote || Date.now() < this._localPendingUntil;
+    return Boolean(stateObj && stateObj.attributes.pending);
   }
 
   _isBlocked() {
@@ -256,7 +294,9 @@ class EvoluteHoldButton extends HTMLElement {
     if (!this._rendered || !this._hass || !this._config) return;
 
     const stateObj = this._entityState();
-    const pending = this._isPending();
+    const sending = this._isSending();
+    const sent = !sending && this._justSent();
+    const awaiting = !sending && !sent && this._isAwaiting();
     const blocked = this._isBlocked();
 
     const name =
@@ -264,38 +304,51 @@ class EvoluteHoldButton extends HTMLElement {
       (stateObj && stateObj.attributes.friendly_name) ||
       this._config.entity;
     this._nameEl.textContent = name;
-    this._stateEl.textContent = pending ? "отправлено…" : this._stateText();
+
+    if (sending) {
+      this._stateEl.textContent = "отправка…";
+    } else if (sent) {
+      this._stateEl.textContent = "отправлено";
+    } else if (awaiting) {
+      this._stateEl.textContent = "ждём машину";
+    } else {
+      this._stateEl.textContent = this._stateText();
+    }
 
     let icon = this._config.icon;
-    if (pending) {
-      icon = "mdi:timer-sand";
+    if (sent) {
+      icon = "mdi:check";
     } else if (!icon) {
       icon = (stateObj && stateObj.attributes.icon) || "mdi:gesture-tap-hold";
     }
     this._iconEl.setAttribute("icon", icon);
 
-    this._card.classList.toggle("pending", pending);
-    this._card.classList.toggle("disabled", blocked || pending);
+    this._card.classList.toggle("sending", sending);
+    this._card.classList.toggle("sent", sent);
+    this._card.classList.toggle("awaiting", awaiting);
+    // Only an in-flight request or a refusal from the vehicle takes the button
+    // out of service; waiting on telemetry does not.
+    this._card.classList.toggle("disabled", blocked || sending);
 
     const stateEntityObj =
       this._config.state_entity && this._hass.states[this._config.state_entity];
     this._card.classList.toggle(
       "active",
-      !pending && Boolean(stateEntityObj) && stateEntityObj.state === "on"
+      !sending && !sent && Boolean(stateEntityObj) && stateEntityObj.state === "on"
     );
 
     this._card.setAttribute(
       "aria-label",
-      `${name}${blocked ? " (недоступно)" : ""}${pending ? " (команда отправлена)" : ""}`
+      `${name}${blocked ? " (недоступно)" : ""}${sending ? " (отправка)" : ""}` +
+        `${awaiting ? " (ожидает подтверждения)" : ""}`
     );
 
-    // Re-render once the local pending window lapses, in case the coordinator
-    // never reported a pending flag of its own.
-    if (Date.now() < this._localPendingUntil) {
-      clearTimeout(this._pendingTimer);
+    // Drop the checkmark on its own, without waiting for the next state update.
+    clearTimeout(this._pendingTimer);
+    if (sent) {
       this._pendingTimer = setTimeout(
         () => this._update(),
-        this._localPendingUntil - Date.now() + 50
+        this._sentUntil - Date.now() + 50
       );
     }
   }
@@ -304,7 +357,7 @@ class EvoluteHoldButton extends HTMLElement {
 
   _onPointerDown(ev) {
     if (ev.button !== undefined && ev.button !== 0) return;
-    if (this._isBlocked() || this._isPending()) return;
+    if (this._isBlocked() || this._isSending()) return;
 
     if (!this._config.require_hold) return;
 
@@ -332,7 +385,7 @@ class EvoluteHoldButton extends HTMLElement {
         this._reject("Команда сейчас недоступна");
         return;
       }
-      if (this._isPending()) return;
+      if (this._isSending()) return;
       this._fire();
       return;
     }
@@ -388,18 +441,23 @@ class EvoluteHoldButton extends HTMLElement {
       this._reject("Команда сейчас недоступна");
       return;
     }
-    if (this._isPending()) return;
+    if (this._isSending()) return;
 
     this._haptic("success");
-    this._localPendingUntil = Date.now() + LOCAL_PENDING_MS;
+    this._sending = true;
+    this._sentUntil = 0;
     this._update();
 
     try {
       await this._hass.callService("button", "press", {
         entity_id: this._config.entity,
       });
+      this._sending = false;
+      this._sentUntil = Date.now() + SENT_FLASH_MS;
+      this._update();
     } catch (err) {
-      this._localPendingUntil = 0;
+      this._sending = false;
+      this._sentUntil = 0;
       this._update();
       this._reject(`Команда не прошла: ${err.message || err}`);
     }

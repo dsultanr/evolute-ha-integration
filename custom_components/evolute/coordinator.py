@@ -25,10 +25,6 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# A command with no observable telemetry key (blink) cannot be confirmed, so it only
-# stays "pending" long enough to give the UI a visible acknowledgement.
-UNCONFIRMABLE_PENDING_SECONDS = 10
-
 
 @dataclass
 class PendingCommand:
@@ -111,13 +107,17 @@ class EvoluteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
         if not success:
             return False
 
-        timeout = (
-            COMMAND_PENDING_TIMEOUT_SECONDS if confirm_key else UNCONFIRMABLE_PENDING_SECONDS
-        )
+        # Only a command with an observable telemetry key is worth waiting for.
+        # Blink changes nothing we can read, so it is done the moment the API
+        # accepts it - marking it pending would just spin an indicator for
+        # nothing and re-poll telemetry that cannot have changed.
+        if confirm_key is None:
+            return True
+
         self._pending.setdefault(car_id, {})[command] = PendingCommand(
             confirm_key=confirm_key,
             baseline=baseline,
-            expires_at=monotonic() + timeout,
+            expires_at=monotonic() + COMMAND_PENDING_TIMEOUT_SECONDS,
         )
         self.async_update_listeners()
         self._schedule_command_refreshes()
