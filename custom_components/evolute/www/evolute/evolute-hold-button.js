@@ -275,7 +275,10 @@ class EvoluteHoldButton extends HTMLElement {
   _isBlocked() {
     const stateObj = this._entityState();
     if (!stateObj) return true;
-    if (stateObj.state === "unavailable" || stateObj.state === "unknown") return true;
+    if (stateObj.state === "unavailable") return true;
+    // Состояние button - это метка времени последнего нажатия, поэтому "unknown"
+    // значит "ещё ни разу не нажимали", а вовсе не "недоступно". Считать его
+    // блокировкой нельзя: кнопка, которую не трогали, гасла бы навсегда.
     return Boolean(stateObj.attributes.blocked);
   }
 

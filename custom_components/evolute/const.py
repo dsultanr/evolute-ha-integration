@@ -6,7 +6,7 @@ DOMAIN = "evolute"
 
 # Bump together with manifest.json: it is the cache-buster on the Lovelace resource
 # URL, so an old copy of the card is not served after an update.
-CARD_VERSION = "1.3.2"
+CARD_VERSION = "1.3.3"
 CARD_FILENAME = "evolute-hold-button.js"
 CARD_URL = f"/local/evolute/{CARD_FILENAME}"
 
