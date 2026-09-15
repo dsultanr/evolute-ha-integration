@@ -184,6 +184,59 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _parse_car_info_v2(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize carV2 telemetry without mixing in stale legacy sensor values."""
+    sensors = dict(raw.get("sensors") or {})
+    for key, value in sensors.items():
+        if isinstance(value, str):
+            try:
+                sensors[key] = float(value)
+            except ValueError:
+                pass
+    aliases = {
+        "centralLockingStatus": "isCentralLockingOn",
+        "ignitionStatus": "isIgnitionOn",
+        "trunkStatus": "isTrunkOpen",
+        "remainsMileage": "remainsBatteryMileage",
+        "remainsMileageFuel": "remainsFuelMileage",
+    }
+    for old, new in aliases.items():
+        if new in sensors:
+            sensors[old] = sensors[new]
+    normalized = {
+        "sensors": {"sensorsData": sensors, "positionData": sensors},
+        "isOnline": raw.get("isOnline"),
+        "isParked": sensors.get("isParkedOn"),
+        "warnings": raw.get("warnings"),
+    }
+    parsed = _parse_car_info(normalized)
+    parsed["telemetry_time"] = _parse_epoch_ms(raw.get("carStateUpdatedAt"))
+    parsed["last_online"] = parsed["telemetry_time"] if raw.get("isOnline") else None
+    parsed["status_text"] = raw.get("onlineState")
+    commands = {"heatingOn": "heating", "coolingOn": "cooling",
+                "centralLockingOff": "centralLockingToggle", "search": "blink",
+                "tripPreparationOn": COMMAND_PREPARE}
+    disabled = set()
+    for button in raw.get("buttons") or []:
+        command = commands.get(button.get("activateCommand"))
+        if command in ("heating", "cooling"):
+            parsed[command] = button.get("status")
+        if command and not button.get("enabled", False):
+            disabled.add(command)
+        if button.get("activateCommand") == "tripPreparationOn":
+            parsed["prep_running"] = bool(button.get("status"))
+            parsed["prep_available"] = bool(button.get("enabled"))
+            parsed["prep_disabled"] = not bool(button.get("enabled"))
+    if parsed["prep_running"] or not parsed["prep_available"]:
+        disabled.add(COMMAND_PREPARE)
+    if not parsed["prep_running"]:
+        disabled.add(COMMAND_CANCEL)
+    if "isParkedOn" not in sensors:
+        parsed["is_parked"] = parsed["is_moving"] = None
+    parsed[DISABLED_COMMANDS_KEY] = disabled
+    return parsed
+
+
 def _parse_car_details(row: dict[str, Any]) -> dict[str, Any]:
     """Flatten the slow-moving fields of a /car/v2/search row (service, OTA, ...)."""
     maintenance = row.get("maintenance") or {}
@@ -226,6 +279,7 @@ class EvoluteClient:
         self.refresh_token = refresh_token
         self._tokens_updated_callback = tokens_updated_callback
         self.auth_failed = False
+        self._imeis: dict[str, str] = {}
         self._etags: dict[str, str] = {}
         self._last_info: dict[str, dict[str, Any]] = {}
 
@@ -316,6 +370,10 @@ class EvoluteClient:
             car_id = row.get("_id")
             if not car_id:
                 continue
+            details = await self._request("GET", f"{BASE_URL}/car-service/car/v2/{car_id}")
+            imei = (details or {}).get("imei")
+            if imei:
+                self._imeis[car_id] = str(imei)
             cars.append(
                 {
                     "car_id": car_id,
@@ -342,7 +400,9 @@ class EvoluteClient:
 
     async def async_get_car_info(self, car_id: str) -> dict[str, Any] | None:
         """Fetch and flatten telemetry for a single car. None on failure."""
-        url = f"{BASE_URL}/car-service/tbox/{car_id}/info"
+        imei = self._imeis.get(car_id)
+        url = (f"{BASE_URL}/client-bff-service/telemetry/{imei}" if imei
+               else f"{BASE_URL}/car-service/tbox/{car_id}/info")
 
         for attempt in range(2):
             headers = self._headers()
@@ -376,7 +436,7 @@ class EvoluteClient:
                         self._etags[car_id] = new_etag
 
                     raw = await resp.json(content_type=None)
-                    parsed = _parse_car_info(raw)
+                    parsed = _parse_car_info_v2(raw) if imei else _parse_car_info(raw)
                     self._last_info[car_id] = parsed
                     return parsed
             except aiohttp.ClientError as err:
