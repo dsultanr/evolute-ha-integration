@@ -160,7 +160,7 @@ class EvoluteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
                 if pending.command_id is None:
                     continue
                 status = await self.client.async_get_command_status(
-                    pending.command_id
+                    car_id, pending.command_id
                 )
                 if status not in COMMAND_TERMINAL_STATUSES:
                     continue

@@ -616,12 +616,25 @@ class EvoluteClient:
         command_id = result.get("commandId")
         return True, str(command_id) if command_id else None
 
-    async def async_get_command_status(self, command_id: str) -> str | None:
-        """Return pending / delivered / success / error for a sent command."""
-        result = await self._request(
-            "GET", f"{TELEMETRY_COMMANDS_URL}/{command_id}"
-        )
-        if result is None:
+    async def async_get_command_status(
+        self, car_id: str, command_id: str
+    ) -> str | None:
+        """Return pending / delivered / success / error for a sent command.
+
+        The endpoint is keyed by IMEI, not by command id, and reports whatever
+        command the car ran last - so the id it returns has to be matched
+        against the one we sent, or a command issued from the app in the
+        meantime would be read as the answer to ours. An unknown key is
+        answered with an empty 200 rather than a 404, which lands here as a
+        missing id and is treated the same way.
+        """
+        imei = self._imeis.get(car_id)
+        if not imei:
+            return None
+        result = await self._request("GET", f"{TELEMETRY_COMMANDS_URL}/{imei}")
+        if not result:
+            return None
+        if str(result.get("commandId") or "") != command_id:
             return None
         return result.get("status")
 
