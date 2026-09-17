@@ -107,4 +107,7 @@ class EvoluteButton(CoordinatorEntity, ButtonEntity):
         }
         if self._confirm_key:
             attributes["confirm_key"] = self._confirm_key
+        reason = self.coordinator.command_block_reason(self._car_id)
+        if reason and attributes["blocked"]:
+            attributes["blocked_reason"] = reason
         return attributes

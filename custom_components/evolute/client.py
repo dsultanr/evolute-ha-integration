@@ -18,8 +18,16 @@ from .const import (
     COMMAND_PREPARE,
     COOKIE_ACCESS,
     COOKIE_REFRESH,
+    BLOCK_NOT_PARKED,
+    BLOCK_OFFLINE,
+    BLOCK_UNLOCKED,
+    CENTRAL_LOCK_TAG,
     DISABLED_COMMANDS_KEY,
     REFRESH_URL,
+    TRIP_PREPARATION_TAGS,
+    USER_FLAGS_URL,
+    TELEMETRY_COMMANDS_URL,
+    V2_COMMAND_BUTTONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -184,7 +192,33 @@ def _parse_car_info(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _parse_car_info_v2(raw: dict[str, Any]) -> dict[str, Any]:
+def _status_chip(sensors: dict[str, Any], is_online: Any) -> str:
+    """Reproduce the status chip the web app renders from the same telemetry.
+
+    carV2 has no chip object, and onlineState only ever says connected /
+    disconnected - which the Online binary sensor already reports. The label the
+    user sees in the app ("В пути", "Идет зарядка", ...) is derived client-side,
+    so derive it the same way here.
+    """
+    if not is_online:
+        return "Не в сети"
+    voltage = sensors.get("12VBatteryVoltage")
+    charging = (
+        sensors.get("isChargingGunInserted") is True
+        or sensors.get("chargingStatus") == 1
+    )
+    if charging and isinstance(voltage, (int, float)) and voltage >= 13:
+        return "Идет зарядка"
+    if sensors.get("ready") is True or sensors.get("isParkedOn") is False:
+        return "В пути"
+    if sensors.get("isIgnitionOn") is True or sensors.get("ignitionStatus") == 1:
+        return "Зажигание включено"
+    return "Доступен"
+
+
+def _parse_car_info_v2(
+    raw: dict[str, Any], tagged_buttons_visible: bool = True
+) -> dict[str, Any]:
     """Normalize carV2 telemetry without mixing in stale legacy sensor values."""
     sensors = dict(raw.get("sensors") or {})
     for key, value in sensors.items():
@@ -212,15 +246,30 @@ def _parse_car_info_v2(raw: dict[str, Any]) -> dict[str, Any]:
     parsed = _parse_car_info(normalized)
     parsed["telemetry_time"] = _parse_epoch_ms(raw.get("carStateUpdatedAt"))
     parsed["last_online"] = parsed["telemetry_time"] if raw.get("isOnline") else None
-    parsed["status_text"] = raw.get("onlineState")
+    parsed["status_text"] = _status_chip(sensors, raw.get("isOnline"))
+    parsed["online_state"] = raw.get("onlineState")
+    parsed["position_time"] = _parse_epoch_ms(raw.get("positionAt"))
+    parsed["signal_level"] = sensors.get("signalLevel")
+    parsed["charging_gun"] = sensors.get("isChargingGunInserted")
+    parsed["is_charging"] = parsed["status_text"] == "Идет зарядка"
+    parsed["car_state_ready"] = raw.get("isCarStateReady")
+    firmware = raw.get("firmwareCheck") or {}
+    settings = raw.get("settingsCheck") or {}
+    parsed["firmware_version"] = firmware.get("actual")
+    parsed["firmware_expected"] = firmware.get("expected")
+    parsed["firmware_mismatch"] = bool(firmware.get("mismatch"))
+    parsed["settings_mismatch"] = bool(settings.get("mismatch"))
     commands = {"heatingOn": "heating", "coolingOn": "cooling",
                 "centralLockingOff": "centralLockingToggle", "search": "blink",
-                "tripPreparationOn": COMMAND_PREPARE}
+                "trunkOpen": "trunkToggle", "tripPreparationOn": COMMAND_PREPARE}
     disabled = set()
+    tags: dict[str, str | None] = {}
     for button in raw.get("buttons") or []:
         command = commands.get(button.get("activateCommand"))
         if command in ("heating", "cooling"):
             parsed[command] = button.get("status")
+        if command:
+            tags[command] = button.get("tag")
         if command and not button.get("enabled", False):
             disabled.add(command)
         if button.get("activateCommand") == "tripPreparationOn":
@@ -231,6 +280,43 @@ def _parse_car_info_v2(raw: dict[str, Any]) -> dict[str, Any]:
         disabled.add(COMMAND_PREPARE)
     if not parsed["prep_running"]:
         disabled.add(COMMAND_CANCEL)
+
+    # buttons[].enabled is only one of the reasons a control is refused. The app
+    # greys the rest out from the same telemetry, so without them we offer
+    # commands the car will not accept: nothing is dispatched unless it reports
+    # itself parked and online, and while the central lock is open only the
+    # central-lock group stays live. CANCEL shares PREPARE's button and tag.
+    tags[COMMAND_CANCEL] = tags.get(COMMAND_PREPARE)
+    if sensors.get("isParkedOn") is not True:
+        block_reason = BLOCK_NOT_PARKED
+    elif not raw.get("isOnline"):
+        block_reason = BLOCK_OFFLINE
+    elif sensors.get("isCentralLockingOn") is False:
+        block_reason = BLOCK_UNLOCKED
+    else:
+        block_reason = None
+
+    if block_reason == BLOCK_UNLOCKED:
+        disabled.update(
+            command
+            for command in V2_COMMAND_BUTTONS
+            if tags.get(command) != CENTRAL_LOCK_TAG
+        )
+    elif block_reason is not None:
+        disabled.update(V2_COMMAND_BUTTONS)
+    parsed["command_block_reason"] = block_reason
+
+    # Trip preparation is a tagged button, which the app renders only for a
+    # privileged account. Without the flag there is nothing to act on and
+    # nothing to compare against, so report no state rather than a running
+    # script the user cannot see, start or stop.
+    hidden = {
+        command for command, tag in tags.items() if tag in TRIP_PREPARATION_TAGS
+    }
+    if hidden and not tagged_buttons_visible:
+        disabled.update(hidden)
+        for key in ("prep_running", "prep_available", "prep_disabled", "prep_error"):
+            parsed[key] = None
     if "isParkedOn" not in sensors:
         parsed["is_parked"] = parsed["is_moving"] = None
     parsed[DISABLED_COMMANDS_KEY] = disabled
@@ -280,6 +366,13 @@ class EvoluteClient:
         self._tokens_updated_callback = tokens_updated_callback
         self.auth_failed = False
         self._imeis: dict[str, str] = {}
+        # Whether this account may see tag-gated controls. Assume it may until
+        # the flags endpoint says otherwise, so a failed lookup never silently
+        # removes a control that works.
+        self._tagged_buttons_visible = True
+        # Raw carV2 buttons[], kept per car so a command can be resolved to the
+        # half of the toggle the app would send for the current state.
+        self._buttons: dict[str, list[dict[str, Any]]] = {}
         self._etags: dict[str, str] = {}
         self._last_info: dict[str, dict[str, Any]] = {}
 
@@ -363,6 +456,8 @@ class EvoluteClient:
         if rows is None:
             return None
 
+        await self._async_update_user_flags()
+
         cars = []
         for row in rows:
             model = row.get("carModel") or {}
@@ -397,6 +492,15 @@ class EvoluteClient:
         return {
             row["_id"]: _parse_car_details(row) for row in rows if row.get("_id")
         }
+
+    async def _async_update_user_flags(self) -> None:
+        """Read the account permissions that decide which controls are offered."""
+        flags = await self._request("GET", USER_FLAGS_URL)
+        if flags is None:
+            return
+        self._tagged_buttons_visible = bool(
+            flags.get("isSuperAdmin") or flags.get("canViewTaggedCarButtons")
+        )
 
     async def async_get_car_info(self, car_id: str) -> dict[str, Any] | None:
         """Fetch and flatten telemetry for a single car. None on failure."""
@@ -436,7 +540,16 @@ class EvoluteClient:
                         self._etags[car_id] = new_etag
 
                     raw = await resp.json(content_type=None)
-                    parsed = _parse_car_info_v2(raw) if imei else _parse_car_info(raw)
+                    if imei:
+                        parsed = _parse_car_info_v2(
+                            raw, self._tagged_buttons_visible
+                        )
+                        self._buttons[car_id] = [
+                            button for button in (raw.get("buttons") or [])
+                            if isinstance(button, dict)
+                        ]
+                    else:
+                        parsed = _parse_car_info(raw)
                     self._last_info[car_id] = parsed
                     return parsed
             except aiohttp.ClientError as err:
@@ -445,11 +558,72 @@ class EvoluteClient:
 
         return None
 
-    async def async_send_command(self, car_id: str, command: str) -> bool:
-        """Send a remote command to the car (e.g. heating, cooling, blink)."""
-        url = f"{BASE_URL}/car-service/tbox/{car_id}/{command}"
-        result = await self._request("POST", url, json_body={})
-        return result is not None
+    def _resolve_v2_command(self, car_id: str, command: str) -> str | None:
+        """Map one of our command names onto the carV2 fnName to send.
+
+        Every control is a two-sided toggle in buttons[]; the app sends the
+        deactivate half when the button reads as on and the activate half
+        otherwise. PREPARE / CANCEL are the two halves of one button, so they
+        pick their side by name instead of by state.
+        """
+        target = V2_COMMAND_BUTTONS.get(command)
+        if target is None:
+            return None
+        for button in self._buttons.get(car_id) or []:
+            if button.get("activateCommand") != target:
+                continue
+            if command == COMMAND_PREPARE:
+                return button.get("activateCommand")
+            if command == COMMAND_CANCEL:
+                return button.get("deactivateCommand")
+            return (
+                button.get("deactivateCommand")
+                if button.get("status")
+                else button.get("activateCommand")
+            )
+        return None
+
+    async def async_send_command(
+        self, car_id: str, command: str
+    ) -> tuple[bool, str | None]:
+        """Send a remote command. Returns (accepted, command_id).
+
+        command_id is None on the legacy path, which reports nothing back and
+        can only be confirmed by watching telemetry.
+        """
+        imei = self._imeis.get(car_id)
+        if not imei:
+            url = f"{BASE_URL}/car-service/tbox/{car_id}/{command}"
+            result = await self._request("POST", url, json_body={})
+            return result is not None, None
+
+        fn_name = self._resolve_v2_command(car_id, command)
+        if fn_name is None:
+            _LOGGER.warning(
+                "Evolute command %s has no matching carV2 button for %s",
+                command,
+                car_id,
+            )
+            return False, None
+
+        result = await self._request(
+            "POST",
+            TELEMETRY_COMMANDS_URL,
+            json_body={"commandName": fn_name, "imei": imei},
+        )
+        if result is None:
+            return False, None
+        command_id = result.get("commandId")
+        return True, str(command_id) if command_id else None
+
+    async def async_get_command_status(self, command_id: str) -> str | None:
+        """Return pending / delivered / success / error for a sent command."""
+        result = await self._request(
+            "GET", f"{TELEMETRY_COMMANDS_URL}/{command_id}"
+        )
+        if result is None:
+            return None
+        return result.get("status")
 
     async def _request(
         self, method: str, url: str, json_body: dict[str, Any] | None = None

@@ -99,7 +99,7 @@ class EvoluteDeviceTracker(CoordinatorEntity, TrackerEntity):
         """Return additional state attributes."""
         data = self._car_data()
         attributes: dict[str, Any] = {}
-        for key in ("course", "altitude", "satellites", "hdop", "speed"):
+        for key in ("course", "altitude", "satellites", "hdop", "speed", "signal_level"):
             if data.get(key) is not None:
                 attributes[key] = data[key]
 

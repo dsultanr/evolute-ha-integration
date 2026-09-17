@@ -6,7 +6,7 @@ DOMAIN = "evolute"
 
 # Bump together with manifest.json: it is the cache-buster on the Lovelace resource
 # URL, so an old copy of the card is not served after an update.
-CARD_VERSION = "1.3.4"
+CARD_VERSION = "1.4.1"
 CARD_FILENAME = "evolute-hold-button.js"
 CARD_URL = f"/local/evolute/{CARD_FILENAME}"
 
@@ -17,7 +17,12 @@ PLATFORMS = ["sensor", "binary_sensor", "button", "device_tracker"]
 
 BASE_URL = "https://app.evassist.ru"
 REFRESH_URL = f"{BASE_URL}/id-service/auth/refresh-token"
+USER_FLAGS_URL = f"{BASE_URL}/id-service/user/flags"
 CAR_SEARCH_URL = f"{BASE_URL}/car-service/car/v2/search"
+# Remote control moved off /car-service/tbox/{car_id}/{command} together with
+# telemetry: the app now posts {commandName, imei} here and polls the returned
+# commandId until it reports a terminal status.
+TELEMETRY_COMMANDS_URL = f"{BASE_URL}/client-bff-service/telemetry-commands"
 
 COOKIE_ACCESS = "evy-platform-access"
 COOKIE_REFRESH = "evy-platform-refresh"
@@ -49,6 +54,45 @@ DISABLED_COMMANDS_KEY = "_disabled_commands"
 COMMAND_PREPARE = "PREPARE"
 COMMAND_CANCEL = "CANCEL"
 
+# Command lifecycle reported by GET /telemetry-commands/{id}. "delivered" means
+# the car received it; only success/error are terminal.
+COMMAND_STATUS_SUCCESS = "success"
+COMMAND_STATUS_ERROR = "error"
+COMMAND_TERMINAL_STATUSES = (COMMAND_STATUS_SUCCESS, COMMAND_STATUS_ERROR)
+
+# carV2 describes every remote control in buttons[], each with an activate and a
+# deactivate half. This maps our command names onto the activateCommand that
+# identifies the button; which half is actually sent is decided at send time from
+# the button's current status, exactly as the app does it.
+# buttons[].tag groups controls the app treats specially: the central-lock group
+# stays usable while the car is unlocked, everything else does not.
+CENTRAL_LOCK_TAG = "central-lock"
+
+# Buttons carrying one of these tags are only rendered for an account with
+# isSuperAdmin or canViewTaggedCarButtons; the app hides them from everyone
+# else even though the telemetry still describes them.
+TRIP_PREPARATION_TAGS = (
+    "trip-preparation",
+    "trip-preparation-high",
+    "trip-preparation-low",
+)
+
+# Why the backend would refuse a command right now. The app derives these from
+# the same telemetry and greys the control out instead of letting it fail.
+BLOCK_NOT_PARKED = "Машина не в режиме паркинга"
+BLOCK_OFFLINE = "Машина оффлайн"
+BLOCK_UNLOCKED = "Сначала закройте центральный замок"
+
+V2_COMMAND_BUTTONS = {
+    "centralLockingToggle": "centralLockingOff",
+    "heating": "heatingOn",
+    "cooling": "coolingOn",
+    "trunkToggle": "trunkOpen",
+    "blink": "search",
+    COMMAND_PREPARE: "tripPreparationOn",
+    COMMAND_CANCEL: "tripPreparationOn",
+}
+
 # Sensor definitions: (name, unit, device_class, icon, state_key, state_class)
 SENSOR_TYPES = {
     "battery_percentage": ("Battery", "%", SensorDeviceClass.BATTERY, "mdi:battery", "battery_percentage", SensorStateClass.MEASUREMENT),
@@ -64,7 +108,6 @@ SENSOR_TYPES = {
     "climate_current_temp": ("Climate Current Temperature", "°C", SensorDeviceClass.TEMPERATURE, "mdi:thermometer", "climate_current_temp", SensorStateClass.MEASUREMENT),
     "climate_target_temp": ("Climate Target Temperature", "°C", SensorDeviceClass.TEMPERATURE, "mdi:thermometer", "climate_target_temp", SensorStateClass.MEASUREMENT),
     "climate_fan_speed": ("Climate Fan Speed", None, None, "mdi:fan", "climate_fan_speed", SensorStateClass.MEASUREMENT),
-    "speed": ("Speed", "km/h", SensorDeviceClass.SPEED, "mdi:speedometer", "speed", SensorStateClass.MEASUREMENT),
     "latitude": ("Latitude", "°", None, "mdi:map-marker", "latitude", SensorStateClass.MEASUREMENT),
     "longitude": ("Longitude", "°", None, "mdi:map-marker", "longitude", SensorStateClass.MEASUREMENT),
     "altitude": ("Altitude", "m", SensorDeviceClass.DISTANCE, "mdi:altimeter", "altitude", SensorStateClass.MEASUREMENT),
@@ -74,6 +117,11 @@ SENSOR_TYPES = {
     "last_online": ("Last Online", None, SensorDeviceClass.TIMESTAMP, "mdi:clock-outline", "last_online", None),
     "telemetry_time": ("Telemetry Time", None, SensorDeviceClass.TIMESTAMP, "mdi:clock-check-outline", "telemetry_time", None),
     "status_text": ("Status", None, None, "mdi:information-outline", "status_text", None),
+    "online_state": ("Connection State", None, None, "mdi:transit-connection-variant", "online_state", None),
+    "signal_level": ("GSM Signal", None, None, "mdi:signal-cellular-3", "signal_level", SensorStateClass.MEASUREMENT),
+    "position_time": ("Position Time", None, SensorDeviceClass.TIMESTAMP, "mdi:crosshairs-gps", "position_time", None),
+    "firmware_version": ("Firmware Version", None, None, "mdi:chip", "firmware_version", None),
+    "firmware_expected": ("Firmware Version (Expected)", None, None, "mdi:chip", "firmware_expected", None),
     "warnings_count": ("Warning Count", None, None, "mdi:alert-circle-outline", "warnings_count", SensorStateClass.MEASUREMENT),
     "prep_end_time": ("Trip Preparation Remaining", None, None, "mdi:timer-outline", "prep_end_time", None),
     "prep_start_time": ("Trip Preparation Started", None, SensorDeviceClass.TIMESTAMP, "mdi:clock-start", "prep_start_time", None),
@@ -114,6 +162,11 @@ BINARY_SENSOR_TYPES = {
     "prep_disabled": ("Trip Preparation Unavailable Now", BinarySensorDeviceClass.PROBLEM, "prep_disabled"),
     "prep_error": ("Trip Preparation Error", BinarySensorDeviceClass.PROBLEM, "prep_error"),
     "warnings": ("Warnings", BinarySensorDeviceClass.PROBLEM, "has_warnings"),
+    "charging_gun": ("Charging Gun", BinarySensorDeviceClass.PLUG, "charging_gun"),
+    "charging": ("Charging", BinarySensorDeviceClass.BATTERY_CHARGING, "is_charging"),
+    "car_state_ready": ("Telemetry Ready", None, "car_state_ready"),
+    "firmware_mismatch": ("Firmware Mismatch", BinarySensorDeviceClass.PROBLEM, "firmware_mismatch"),
+    "settings_mismatch": ("Settings Mismatch", BinarySensorDeviceClass.PROBLEM, "settings_mismatch"),
     # Sourced from the slow /car/v2/search poll rather than tbox telemetry.
     "update_available": ("Firmware Update Available", BinarySensorDeviceClass.UPDATE, "update_available"),
     "location_enabled": ("Location Reporting", None, "location_enabled"),

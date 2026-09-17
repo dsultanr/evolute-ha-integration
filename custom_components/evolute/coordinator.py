@@ -16,6 +16,8 @@ from .client import EvoluteClient
 from .const import (
     COMMAND_PENDING_TIMEOUT_SECONDS,
     COMMAND_REFRESH_DELAYS,
+    COMMAND_STATUS_ERROR,
+    COMMAND_TERMINAL_STATUSES,
     DETAILS_RETRY_INTERVAL_SECONDS,
     DETAILS_UPDATE_INTERVAL_SECONDS,
     DISABLED_COMMANDS_KEY,
@@ -33,6 +35,9 @@ class PendingCommand:
     confirm_key: str | None
     baseline: Any
     expires_at: float
+    # Set on the carV2 path, where the backend tracks the command itself and
+    # reports whether the car accepted or rejected it.
+    command_id: str | None = None
 
 
 class EvoluteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -76,6 +81,7 @@ class EvoluteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
                 )
             raise UpdateFailed("Unable to reach Evolute (app.evassist.ru)")
 
+        await self._async_resolve_command_ids()
         self._resolve_pending(data)
         return data
 
@@ -103,8 +109,8 @@ class EvoluteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
         current = (self.data or {}).get(car_id, {})
         baseline = current.get(confirm_key) if confirm_key else None
 
-        success = await self.client.async_send_command(car_id, command)
-        if not success:
+        accepted, command_id = await self.client.async_send_command(car_id, command)
+        if not accepted:
             return False
 
         # Only a command with an observable telemetry key is worth waiting for.
@@ -118,6 +124,7 @@ class EvoluteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
             confirm_key=confirm_key,
             baseline=baseline,
             expires_at=monotonic() + COMMAND_PENDING_TIMEOUT_SECONDS,
+            command_id=command_id,
         )
         self.async_update_listeners()
         self._schedule_command_refreshes()
@@ -141,6 +148,32 @@ class EvoluteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
     async def _async_burst_refresh(self, _now: Any) -> None:
         await self.async_request_refresh()
 
+    async def _async_resolve_command_ids(self) -> None:
+        """Clear pending commands the backend has already settled.
+
+        On the carV2 path a command carries an id whose status the backend
+        resolves in a few seconds, so a rejected command can be reported right
+        away instead of spinning until the pending timeout.
+        """
+        for car_id, commands in list(self._pending.items()):
+            for command, pending in list(commands.items()):
+                if pending.command_id is None:
+                    continue
+                status = await self.client.async_get_command_status(
+                    pending.command_id
+                )
+                if status not in COMMAND_TERMINAL_STATUSES:
+                    continue
+                if status == COMMAND_STATUS_ERROR:
+                    _LOGGER.warning(
+                        "Evolute command %s for car %s was rejected by the vehicle",
+                        command,
+                        car_id,
+                    )
+                del commands[command]
+            if not commands:
+                del self._pending[car_id]
+
     def _resolve_pending(self, data: dict[str, dict[str, Any]]) -> None:
         """Drop pending commands that the car has confirmed or that timed out."""
         now = monotonic()
@@ -162,6 +195,10 @@ class EvoluteDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any
     def is_command_pending(self, car_id: str, command: str) -> bool:
         """Return True while a sent command has not yet shown up in telemetry."""
         return command in self._pending.get(car_id, {})
+
+    def command_block_reason(self, car_id: str) -> str | None:
+        """Return why the vehicle is refusing commands right now, if it is."""
+        return (self.data or {}).get(car_id, {}).get("command_block_reason")
 
     def is_command_blocked(self, car_id: str, command: str) -> bool:
         """Return True if the backend currently reports the command as disabled."""
