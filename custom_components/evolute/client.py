@@ -375,6 +375,9 @@ class EvoluteClient:
         self._buttons: dict[str, list[dict[str, Any]]] = {}
         self._etags: dict[str, str] = {}
         self._last_info: dict[str, dict[str, Any]] = {}
+        # Cars whose carV2 telemetry profile does not exist (404). They are
+        # served by the legacy tbox endpoint for the rest of this session.
+        self._no_v2: set[str] = set()
 
     @property
     def user_id(self) -> str | None:
@@ -502,13 +505,26 @@ class EvoluteClient:
             flags.get("isSuperAdmin") or flags.get("canViewTaggedCarButtons")
         )
 
+    def _telemetry_imei(self, car_id: str) -> str | None:
+        """The IMEI to read carV2 telemetry with, or None to use the old path.
+
+        A car whose carModel has no modname has no carV2 profile, and the
+        telemetry endpoint answers 404 for it however often it is asked, so
+        once seen it is served by the legacy endpoint instead.
+        """
+        if car_id in self._no_v2:
+            return None
+        return self._imeis.get(car_id)
+
     async def async_get_car_info(self, car_id: str) -> dict[str, Any] | None:
         """Fetch and flatten telemetry for a single car. None on failure."""
-        imei = self._imeis.get(car_id)
+        imei = self._telemetry_imei(car_id)
         url = (f"{BASE_URL}/client-bff-service/telemetry/{imei}" if imei
                else f"{BASE_URL}/car-service/tbox/{car_id}/info")
 
-        for attempt in range(2):
+        refreshed = False
+        fell_back = False
+        for _ in range(3):
             headers = self._headers()
             etag = self._etags.get(car_id)
             if etag:
@@ -524,9 +540,25 @@ class EvoluteClient:
                     if resp.status == 304:
                         return self._last_info.get(car_id)
 
-                    if resp.status == 401 and attempt == 0:
+                    if resp.status == 401 and not refreshed:
+                        refreshed = True
                         if not await self.async_refresh_tokens():
                             return None
+                        continue
+
+                    if resp.status == 404 and imei and not fell_back:
+                        _LOGGER.warning(
+                            "Evolute carV2 telemetry has no profile for %s "
+                            "(HTTP 404); using the legacy tbox endpoint instead",
+                            car_id,
+                        )
+                        self._no_v2.add(car_id)
+                        self._buttons.pop(car_id, None)
+                        # The etag belongs to the endpoint that just 404'd.
+                        self._etags.pop(car_id, None)
+                        fell_back = True
+                        imei = None
+                        url = f"{BASE_URL}/car-service/tbox/{car_id}/info"
                         continue
 
                     if resp.status != 200:
@@ -591,7 +623,7 @@ class EvoluteClient:
         command_id is None on the legacy path, which reports nothing back and
         can only be confirmed by watching telemetry.
         """
-        imei = self._imeis.get(car_id)
+        imei = self._telemetry_imei(car_id)
         if not imei:
             url = f"{BASE_URL}/car-service/tbox/{car_id}/{command}"
             result = await self._request("POST", url, json_body={})
@@ -628,7 +660,7 @@ class EvoluteClient:
         answered with an empty 200 rather than a 404, which lands here as a
         missing id and is treated the same way.
         """
-        imei = self._imeis.get(car_id)
+        imei = self._telemetry_imei(car_id)
         if not imei:
             return None
         result = await self._request("GET", f"{TELEMETRY_COMMANDS_URL}/{imei}")
