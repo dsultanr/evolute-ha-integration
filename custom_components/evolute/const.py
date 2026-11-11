@@ -6,7 +6,7 @@ DOMAIN = "evolute"
 
 # Bump together with manifest.json: it is the cache-buster on the Lovelace resource
 # URL, so an old copy of the card is not served after an update.
-CARD_VERSION = "1.4.3"
+CARD_VERSION = "1.4.4"
 CARD_FILENAME = "evolute-hold-button.js"
 CARD_URL = f"/local/evolute/{CARD_FILENAME}"
 
@@ -17,7 +17,6 @@ PLATFORMS = ["sensor", "binary_sensor", "button", "device_tracker"]
 
 BASE_URL = "https://app.evassist.ru"
 REFRESH_URL = f"{BASE_URL}/id-service/auth/refresh-token"
-USER_FLAGS_URL = f"{BASE_URL}/id-service/user/flags"
 CAR_SEARCH_URL = f"{BASE_URL}/car-service/car/v2/search"
 # Remote control moved off /car-service/tbox/{car_id}/{command} together with
 # telemetry: the app now posts {commandName, imei} here and polls the returned
@@ -49,8 +48,7 @@ COMMAND_PENDING_TIMEOUT_SECONDS = 45
 # currently refusing. Underscore-prefixed so it can never collide with a state key.
 DISABLED_COMMANDS_KEY = "_disabled_commands"
 
-# Trip preparation is the one pair of commands the API does not describe in
-# buttons.main[]; its availability lives in preparation_script instead.
+# Legacy preparation lives in preparation_script; carV2 describes it in buttons[].
 COMMAND_PREPARE = "PREPARE"
 COMMAND_CANCEL = "CANCEL"
 
@@ -67,15 +65,6 @@ COMMAND_TERMINAL_STATUSES = (COMMAND_STATUS_SUCCESS, COMMAND_STATUS_ERROR)
 # buttons[].tag groups controls the app treats specially: the central-lock group
 # stays usable while the car is unlocked, everything else does not.
 CENTRAL_LOCK_TAG = "central-lock"
-
-# Buttons carrying one of these tags are only rendered for an account with
-# isSuperAdmin or canViewTaggedCarButtons; the app hides them from everyone
-# else even though the telemetry still describes them.
-TRIP_PREPARATION_TAGS = (
-    "trip-preparation",
-    "trip-preparation-high",
-    "trip-preparation-low",
-)
 
 # Why the backend would refuse a command right now. The app derives these from
 # the same telemetry and greys the control out instead of letting it fail.
@@ -184,7 +173,6 @@ BUTTON_TYPES = {
     "trunk_toggle": ("Toggle Trunk", "trunkToggle", "mdi:car-back", "trunk"),
     "blink": ("Blink & Honk", "blink", "mdi:bullhorn", None),
     "prepare_start": ("Start Trip Preparation", COMMAND_PREPARE, "mdi:car-clock", "prep_running"),
-    # CANCEL is not confirmed in captured traffic (PREPARE was never triggered
-    # during capture); included by analogy with PREPARE, may not work on all accounts.
+    # carV2 advertises tripPreparationOff; physical cancellation is not yet tested.
     "prepare_cancel": ("Cancel Trip Preparation", COMMAND_CANCEL, "mdi:car-clock", "prep_running"),
 }

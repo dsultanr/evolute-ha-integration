@@ -24,8 +24,6 @@ from .const import (
     CENTRAL_LOCK_TAG,
     DISABLED_COMMANDS_KEY,
     REFRESH_URL,
-    TRIP_PREPARATION_TAGS,
-    USER_FLAGS_URL,
     TELEMETRY_COMMANDS_URL,
     V2_COMMAND_BUTTONS,
 )
@@ -216,9 +214,7 @@ def _status_chip(sensors: dict[str, Any], is_online: Any) -> str:
     return "Доступен"
 
 
-def _parse_car_info_v2(
-    raw: dict[str, Any], tagged_buttons_visible: bool = True
-) -> dict[str, Any]:
+def _parse_car_info_v2(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize carV2 telemetry without mixing in stale legacy sensor values."""
     sensors = dict(raw.get("sensors") or {})
     for key, value in sensors.items():
@@ -276,6 +272,8 @@ def _parse_car_info_v2(
             parsed["prep_running"] = bool(button.get("status"))
             parsed["prep_available"] = bool(button.get("enabled"))
             parsed["prep_disabled"] = not bool(button.get("enabled"))
+            last_run = button.get("lastRun") or {}
+            parsed["prep_start_time"] = _parse_epoch_ms(last_run.get("startedAt"))
     if parsed["prep_running"] or not parsed["prep_available"]:
         disabled.add(COMMAND_PREPARE)
     if not parsed["prep_running"]:
@@ -306,17 +304,6 @@ def _parse_car_info_v2(
         disabled.update(V2_COMMAND_BUTTONS)
     parsed["command_block_reason"] = block_reason
 
-    # Trip preparation is a tagged button, which the app renders only for a
-    # privileged account. Without the flag there is nothing to act on and
-    # nothing to compare against, so report no state rather than a running
-    # script the user cannot see, start or stop.
-    hidden = {
-        command for command, tag in tags.items() if tag in TRIP_PREPARATION_TAGS
-    }
-    if hidden and not tagged_buttons_visible:
-        disabled.update(hidden)
-        for key in ("prep_running", "prep_available", "prep_disabled", "prep_error"):
-            parsed[key] = None
     if "isParkedOn" not in sensors:
         parsed["is_parked"] = parsed["is_moving"] = None
     parsed[DISABLED_COMMANDS_KEY] = disabled
@@ -366,10 +353,6 @@ class EvoluteClient:
         self._tokens_updated_callback = tokens_updated_callback
         self.auth_failed = False
         self._imeis: dict[str, str] = {}
-        # Whether this account may see tag-gated controls. Assume it may until
-        # the flags endpoint says otherwise, so a failed lookup never silently
-        # removes a control that works.
-        self._tagged_buttons_visible = True
         # Raw carV2 buttons[], kept per car so a command can be resolved to the
         # half of the toggle the app would send for the current state.
         self._buttons: dict[str, list[dict[str, Any]]] = {}
@@ -459,8 +442,6 @@ class EvoluteClient:
         if rows is None:
             return None
 
-        await self._async_update_user_flags()
-
         cars = []
         for row in rows:
             model = row.get("carModel") or {}
@@ -495,15 +476,6 @@ class EvoluteClient:
         return {
             row["_id"]: _parse_car_details(row) for row in rows if row.get("_id")
         }
-
-    async def _async_update_user_flags(self) -> None:
-        """Read the account permissions that decide which controls are offered."""
-        flags = await self._request("GET", USER_FLAGS_URL)
-        if flags is None:
-            return
-        self._tagged_buttons_visible = bool(
-            flags.get("isSuperAdmin") or flags.get("canViewTaggedCarButtons")
-        )
 
     def _telemetry_imei(self, car_id: str) -> str | None:
         """The IMEI to read carV2 telemetry with, or None to use the old path.
@@ -573,9 +545,7 @@ class EvoluteClient:
 
                     raw = await resp.json(content_type=None)
                     if imei:
-                        parsed = _parse_car_info_v2(
-                            raw, self._tagged_buttons_visible
-                        )
+                        parsed = _parse_car_info_v2(raw)
                         self._buttons[car_id] = [
                             button for button in (raw.get("buttons") or [])
                             if isinstance(button, dict)
@@ -638,10 +608,27 @@ class EvoluteClient:
             )
             return False, None
 
+        body: dict[str, Any] = {"commandName": fn_name, "imei": imei}
+        if command == COMMAND_PREPARE:
+            # Read at dispatch time: the duration may have changed in the app
+            # since the 15-minute details poll. Never guess a duration on failure.
+            details = await self._request("GET", f"{BASE_URL}/car-service/car/v2/{car_id}")
+            minutes = (details or {}).get("currentScriptTime")
+            available = (details or {}).get("availableScriptTime")
+            if (
+                type(minutes) is not int
+                or minutes <= 0
+                or not isinstance(available, list)
+                or minutes not in available
+            ):
+                _LOGGER.warning("Cannot start trip preparation: no valid configured duration")
+                return False, None
+            body["durationMinutes"] = minutes
+
         result = await self._request(
             "POST",
             TELEMETRY_COMMANDS_URL,
-            json_body={"commandName": fn_name, "imei": imei},
+            json_body=body,
         )
         if result is None:
             return False, None
