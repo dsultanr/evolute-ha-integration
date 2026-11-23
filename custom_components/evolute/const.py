@@ -6,7 +6,7 @@ DOMAIN = "evolute"
 
 # Bump together with manifest.json: it is the cache-buster on the Lovelace resource
 # URL, so an old copy of the card is not served after an update.
-CARD_VERSION = "1.4.4"
+CARD_VERSION = "1.4.5"
 CARD_FILENAME = "evolute-hold-button.js"
 CARD_URL = f"/local/evolute/{CARD_FILENAME}"
 
@@ -111,6 +111,8 @@ SENSOR_TYPES = {
     "position_time": ("Position Time", None, SensorDeviceClass.TIMESTAMP, "mdi:crosshairs-gps", "position_time", None),
     "firmware_version": ("Firmware Version", None, None, "mdi:chip", "firmware_version", None),
     "firmware_expected": ("Firmware Version (Expected)", None, None, "mdi:chip", "firmware_expected", None),
+    "settings_profile": ("Settings Profile", None, None, "mdi:cog", "settings_profile", None),
+    "settings_expected": ("Settings Profile (Expected)", None, None, "mdi:cog", "settings_expected", None),
     "warnings_count": ("Warning Count", None, None, "mdi:alert-circle-outline", "warnings_count", SensorStateClass.MEASUREMENT),
     "prep_end_time": ("Trip Preparation Remaining", None, None, "mdi:timer-outline", "prep_end_time", None),
     "prep_start_time": ("Trip Preparation Started", None, SensorDeviceClass.TIMESTAMP, "mdi:clock-start", "prep_start_time", None),

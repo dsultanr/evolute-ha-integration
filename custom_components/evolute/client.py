@@ -254,6 +254,8 @@ def _parse_car_info_v2(raw: dict[str, Any]) -> dict[str, Any]:
     parsed["firmware_version"] = firmware.get("actual")
     parsed["firmware_expected"] = firmware.get("expected")
     parsed["firmware_mismatch"] = bool(firmware.get("mismatch"))
+    parsed["settings_profile"] = settings.get("actual")
+    parsed["settings_expected"] = settings.get("expected")
     parsed["settings_mismatch"] = bool(settings.get("mismatch"))
     commands = {"heatingOn": "heating", "coolingOn": "cooling",
                 "centralLockingOff": "centralLockingToggle", "search": "blink",
